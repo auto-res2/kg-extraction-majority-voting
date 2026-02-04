@@ -17,15 +17,15 @@
 
 ## 2. Base Implementation (already provided)
 
-The following files implement the baseline and two-stage extraction:
+The following files implement the baseline extraction:
 
-- **run_experiment.py**: Main orchestrator. Loads data, runs conditions (Baseline, Two-Stage), prints comparison table, saves results.json.
+- **run_experiment.py**: Main orchestrator. Loads data, runs conditions (Baseline, Majority Voting), prints comparison table, saves results.json.
 - **data_loader.py**: Data loading from JacRED JSON files, document selection (10 stratified from dev split), few-shot example selection, domain/range constraint table construction from training data.
 - **llm_client.py**: Gemini API wrapper using `google-genai` library with Structured Outputs (`response_mime_type="application/json"` + `response_schema`), ThinkingConfig, and retry logic.
 - **prompts.py**: All prompt templates including system prompt with 35 relation types defined in Japanese, extraction prompt (baseline and recall-oriented modes), and verification prompt for Stage 2.
-- **extraction.py**: Two conditions:
+- **extraction.py**: Conditions:
   - `run_baseline()`: Single LLM call extraction with post-filtering (invalid labels, invalid entity types).
-  - `run_proposed()`: Two-Stage generate+verify. Stage 1 extracts with recall-oriented prompt, Stage 2 batch-verifies candidates, then applies domain/range constraints.
+  - `run_majority_voting()`: Multi-instance majority voting. Runs 3 extraction passes with diverse prompts, takes the union, verifies via Stage 2, and applies domain/range constraints.
 - **evaluation.py**: Entity alignment (3-pass: exact match -> normalized match -> substring match) and micro-averaged P/R/F1 computation.
 - **schemas.py**: JSON schemas for Gemini Structured Outputs (extraction schema with entities+relations, verification schema with decisions).
 
@@ -41,10 +41,9 @@ The following files implement the baseline and two-stage extraction:
 Model: gemini-3-flash-preview (thinking_budget=0)
               Precision   Recall     F1    TP    FP    FN
 Baseline           0.26     0.16   0.20    24    70   124
-Two-Stage          0.36     0.22   0.27    32    56   116
 ```
 
-**Key issue**: Recall is very low (0.16-0.22). Most of the 148 gold relations are missed. The LLM fails to extract many valid relations in a single pass.
+**Key issue**: Recall is very low (0.16). Most of the 148 gold relations are missed. The LLM fails to extract many valid relations in a single pass.
 
 ## 4. Environment Setup
 
@@ -101,9 +100,9 @@ Run 3-5 independent extractions with diverse prompts, aggregate results via unio
   - Add modes: `"cross_sentence"` and `"structural"` with the respective Japanese instructions
   - Or create a new function `build_diverse_extraction_prompts()` that returns a list of prompts
 
-- **Update `run_experiment.py`** to add a third condition:
-  - `"Condition 3: Majority Voting (3-pass + verify)"`
-  - Print comparison table with all 3 conditions
+- **Update `run_experiment.py`** to add a second condition (in addition to Baseline):
+  - `"Condition 2: Majority Voting (3-pass + verify)"`
+  - Print comparison table with both conditions
 
 - **Deduplication logic**: Two triples are considered duplicates if they have the same (head_name_normalized, relation, tail_name_normalized). When merging, keep the entity list from the pass that found the most entities.
 
@@ -117,7 +116,7 @@ Run 3-5 independent extractions with diverse prompts, aggregate results via unio
 
 - Same P/R/F1 computation on the same 10 dev documents
 - Report per-document results and aggregate metrics
-- Compare: Baseline vs Two-Stage vs Majority-Voting
+- Compare: Baseline vs Majority Voting
 
 ### Output Format
 
@@ -125,6 +124,5 @@ The final comparison table should look like:
 ```
               Precision   Recall     F1    TP    FP    FN
 Baseline           ...      ...    ...   ...   ...   ...
-Two-Stage          ...      ...    ...   ...   ...   ...
 MajorityVote       ...      ...    ...   ...   ...   ...
 ```
