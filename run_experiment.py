@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from data_loader import load_jacred, select_dev_docs, select_few_shot, build_constraint_table
 from llm_client import load_api_key, create_client
-from extraction import run_baseline, run_proposed
+from extraction import run_baseline, run_proposed, run_majority_voting
 from evaluation import align_entities, evaluate_relations, aggregate_results
 
 ENV_PATH = os.path.expanduser(
@@ -18,7 +18,7 @@ ENV_PATH = os.path.expanduser(
 NUM_DOCS = 10
 
 
-def run_condition(name, docs, few_shot, client, schema_info, constraint_table=None):
+def run_condition(name, docs, few_shot, client, schema_info, constraint_table=None, extraction_fn="baseline"):
     """Run one experimental condition on all docs."""
     print(f"\n--- {name} ---")
     per_doc_results = []
@@ -26,7 +26,16 @@ def run_condition(name, docs, few_shot, client, schema_info, constraint_table=No
     for i, doc in enumerate(docs):
         title = doc["title"]
 
-        if constraint_table is not None:
+        if extraction_fn == "majority_voting" and constraint_table is not None:
+            entities, triples, stats = run_majority_voting(
+                doc, few_shot, client, schema_info, constraint_table
+            )
+            stats_str = (
+                f" Union={stats['union_candidates']}"
+                f" S2={stats['stage2_kept']}"
+                f" Final={stats['after_constraints']}"
+            )
+        elif extraction_fn == "proposed" and constraint_table is not None:
             entities, triples, stats = run_proposed(
                 doc, few_shot, client, schema_info, constraint_table
             )
@@ -105,16 +114,24 @@ def main():
     )
     proposed_results = run_condition(
         "Condition 2: Proposed (Generate+Verify)",
-        dev_docs, few_shot, client, schema_info, constraint_table
+        dev_docs, few_shot, client, schema_info, constraint_table,
+        extraction_fn="proposed"
+    )
+    majority_results = run_condition(
+        "Condition 3: Majority Voting (3-pass + verify)",
+        dev_docs, few_shot, client, schema_info, constraint_table,
+        extraction_fn="majority_voting"
     )
 
     # Comparison
     b = baseline_results["aggregate"]
     p = proposed_results["aggregate"]
+    m = majority_results["aggregate"]
     print("\n=== Comparison ===")
-    print(f"{'':>12} {'Precision':>10} {'Recall':>8} {'F1':>6} {'TP':>5} {'FP':>5} {'FN':>5}")
-    print(f"{'Baseline':>12} {b['precision']:>10.2f} {b['recall']:>8.2f} {b['f1']:>6.2f} {b['tp']:>5} {b['fp']:>5} {b['fn']:>5}")
-    print(f"{'Proposed':>12} {p['precision']:>10.2f} {p['recall']:>8.2f} {p['f1']:>6.2f} {p['tp']:>5} {p['fp']:>5} {p['fn']:>5}")
+    print(f"{'':>14} {'Precision':>10} {'Recall':>8} {'F1':>6} {'TP':>5} {'FP':>5} {'FN':>5}")
+    print(f"{'Baseline':>14} {b['precision']:>10.2f} {b['recall']:>8.2f} {b['f1']:>6.2f} {b['tp']:>5} {b['fp']:>5} {b['fn']:>5}")
+    print(f"{'Proposed':>14} {p['precision']:>10.2f} {p['recall']:>8.2f} {p['f1']:>6.2f} {p['tp']:>5} {p['fp']:>5} {p['fn']:>5}")
+    print(f"{'MajorityVote':>14} {m['precision']:>10.2f} {m['recall']:>8.2f} {m['f1']:>6.2f} {m['tp']:>5} {m['fp']:>5} {m['fn']:>5}")
 
     # Save results
     output = {
@@ -127,6 +144,7 @@ def main():
         "conditions": {
             "baseline": baseline_results,
             "proposed": proposed_results,
+            "majority_voting": majority_results,
         },
     }
 

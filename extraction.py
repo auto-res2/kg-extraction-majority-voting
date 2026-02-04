@@ -1,6 +1,6 @@
 """Extraction logic for Baseline and Proposed (Two-Stage) conditions."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from google import genai
 
@@ -139,6 +139,104 @@ def run_proposed(
         "after_constraints": final_count,
     }
     return entities, final, stats
+
+
+def run_majority_voting(
+    doc: dict,
+    few_shot: dict,
+    client: genai.Client,
+    schema_info: dict,
+    constraint_table: dict,
+) -> tuple[list[dict], list[Triple], dict]:
+    """Condition 3: Multi-instance majority voting (3-pass + verify)."""
+    system_prompt = build_system_prompt(schema_info["rel_info"])
+    few_shot_output = format_few_shot_output(few_shot)
+    valid_rels = set(schema_info["rel_info"].keys())
+    valid_types = {"PER", "ORG", "LOC", "ART", "DAT", "TIM", "MON", "%"}
+
+    modes = ["recall", "cross_sentence", "structural"]
+    pass_counts = {}
+    all_entities: dict[str, dict] = {}  # name -> entity dict
+    # key: (head_name_normalized, relation, tail_name_normalized) -> (Triple, support_count)
+    triple_map: dict[tuple[str, str, str], tuple[Triple, int]] = {}
+
+    for mode in modes:
+        user_prompt = build_extraction_prompt(
+            doc["doc_text"], few_shot["doc_text"], few_shot_output, mode=mode
+        )
+        result = call_gemini(client, system_prompt, user_prompt, EXTRACTION_SCHEMA)
+        entities, triples = _parse_extraction_result(result)
+
+        pass_counts[f"pass_{mode}"] = len(triples)
+
+        # Deduplicate entities by name
+        for ent in entities:
+            name = ent.get("name", "").strip()
+            if name and name not in all_entities:
+                all_entities[name] = ent
+
+        # Deduplicate triples by (head_name normalized, relation, tail_name normalized)
+        for t in triples:
+            key = (t.head_name.strip(), t.relation, t.tail_name.strip())
+            if key in triple_map:
+                existing_triple, count = triple_map[key]
+                triple_map[key] = (existing_triple, count + 1)
+            else:
+                triple_map[key] = (t, 1)
+
+    # Build union entities list with reassigned IDs
+    entities_union = []
+    name_to_id: dict[str, str] = {}
+    for idx, (name, ent) in enumerate(all_entities.items()):
+        new_id = f"e{idx}"
+        name_to_id[name] = new_id
+        entities_union.append({
+            "id": new_id,
+            "name": name,
+            "type": ent.get("type", ""),
+        })
+
+    # Build union triples list, updating entity IDs to match union entities
+    candidates_union = []
+    for (h_name, rel, t_name), (triple, _count) in triple_map.items():
+        head_id = name_to_id.get(h_name, triple.head)
+        tail_id = name_to_id.get(t_name, triple.tail)
+        candidates_union.append(Triple(
+            head=head_id,
+            head_name=h_name,
+            head_type=triple.head_type,
+            relation=rel,
+            tail=tail_id,
+            tail_name=t_name,
+            tail_type=triple.tail_type,
+            evidence=triple.evidence,
+        ))
+
+    union_candidates_count = len(candidates_union)
+
+    # Filter invalid labels and entity types
+    candidates_union = filter_invalid_labels(candidates_union, valid_rels)
+    candidates_union = filter_invalid_entity_types(candidates_union, valid_types)
+
+    # Stage 2: Verification
+    entity_id_to_name = {e["id"]: e["name"] for e in entities_union}
+    verified = _verify_candidates(
+        doc, candidates_union, entity_id_to_name, client, schema_info, batch_size=10
+    )
+
+    stage2_count = len(verified)
+
+    # Post-processing: domain/range constraints
+    final = apply_domain_range_constraints(verified, constraint_table)
+    final_count = len(final)
+
+    stats = {
+        **pass_counts,
+        "union_candidates": union_candidates_count,
+        "stage2_kept": stage2_count,
+        "after_constraints": final_count,
+    }
+    return entities_union, final, stats
 
 
 def _verify_candidates(
