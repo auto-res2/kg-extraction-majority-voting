@@ -7,7 +7,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from data_loader import load_jacred, select_dev_docs, select_few_shot, build_constraint_table
+from data_loader import load_jacred, select_dev_docs, select_few_shot
 from llm_client import load_api_key, create_client
 from extraction import run_baseline, run_majority_voting
 from evaluation import align_entities, evaluate_relations, aggregate_results
