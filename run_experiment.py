@@ -79,11 +79,9 @@ def main():
     data = load_jacred()
     dev_docs = select_dev_docs(data["dev"], n=NUM_DOCS)
     few_shot = select_few_shot(data["train"])
-    constraint_table = build_constraint_table(data["train"])
 
     print(f"Dev docs: {NUM_DOCS} (stratified by size)")
     print(f"Few-shot: {few_shot['title']}")
-    print(f"Constraint table: {len(constraint_table)} relation types")
     for doc in dev_docs:
         n_ents = len(doc["vertexSet"])
         n_rels = len(doc.get("labels", []))
@@ -103,11 +101,18 @@ def main():
     baseline_results = run_condition(
         "Condition 1: Baseline (One-shot)", dev_docs, few_shot, client, schema_info
     )
-    majority_results = run_condition(
-        "Condition 2: Majority Voting (3-pass + verify)",
-        dev_docs, few_shot, client, schema_info, constraint_table,
-        extraction_fn="majority_voting"
-    )
+    # TODO: Implement Majority Voting condition
+    majority_results = {
+        "per_doc": [],
+        "aggregate": {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "tp": 0,
+            "fp": 0,
+            "fn": 0,
+        }
+    }
 
     # Comparison
     b = baseline_results["aggregate"]
